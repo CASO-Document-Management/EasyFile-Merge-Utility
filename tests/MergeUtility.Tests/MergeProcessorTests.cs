@@ -141,7 +141,7 @@ public class MergeProcessorTests : IDisposable
             .ReturnsAsync(new MemoryStream(new byte[] { 1, 2, 3 }));
         _pdfMerge.Setup(x => x.MergeAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((string b, string a, string o, CancellationToken _) => { File.WriteAllText(o, "merged"); return o; });
-        _document.Setup(x => x.ReplaceAsync(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+        _document.Setup(x => x.ReplaceAsync(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("Replace failed"));
 
         var result = await CreateProcessor().ProcessAsync(MakeFile(), CancellationToken.None);
@@ -159,7 +159,7 @@ public class MergeProcessorTests : IDisposable
             .ReturnsAsync(new MemoryStream(new byte[] { 1, 2, 3 }));
         _pdfMerge.Setup(x => x.MergeAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((string b, string a, string o, CancellationToken _) => { File.WriteAllText(o, "merged"); return o; });
-        _document.Setup(x => x.ReplaceAsync(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+        _document.Setup(x => x.ReplaceAsync(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         var result = await CreateProcessor().ProcessAsync(MakeFile(), CancellationToken.None);

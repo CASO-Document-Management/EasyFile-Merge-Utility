@@ -81,7 +81,7 @@ public class MergeProcessor : IMergeProcessor
             await _pdfMergeService.MergeAsync(tempBasePath, file.FullPath, tempMergedPath, ct);
 
             opContext = MergeStatus.ReplaceFailed;
-            await _documentSource.ReplaceAsync(docId, tempMergedPath,
+            await _documentSource.ReplaceAsync(docId, _options.CabinetName, tempMergedPath,
                 $"Merged large format: {file.FileName}", ct);
 
             return record with { Status = MergeStatus.Success, DurationMs = sw.ElapsedMilliseconds };

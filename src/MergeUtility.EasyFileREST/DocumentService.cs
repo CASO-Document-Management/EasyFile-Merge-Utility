@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 using MergeUtility.Core.Interfaces;
 
@@ -28,9 +29,10 @@ public class DocumentService : BaseEasyFileService, IDocumentSource
         return new ResponseOwningStream(stream, response);
     }
 
-    public async Task ReplaceAsync(int docId, string mergedFilePath, string comments, CancellationToken ct)
+    public async Task ReplaceAsync(int docId, string cabinetName, string mergedFilePath, string comments, CancellationToken ct)
     {
-        // Replace uses DOC_ID directly (not version ID)
+        var versionId = await ResolveLatestVersionIdAsync(docId, ct);
+
         using var content = new MultipartFormDataContent();
 
         var fileStream = new FileStream(mergedFilePath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, true);
@@ -40,8 +42,9 @@ public class DocumentService : BaseEasyFileService, IDocumentSource
         content.Add(new StringContent(_tokenManager.CurrentUser), "UserId");
         content.Add(new StringContent(comments), "Comment");
         content.Add(new StringContent(Path.GetFileName(mergedFilePath)), "FileName");
+        content.Add(new StringContent("false"), "CreateNewVersion");
 
-        var request = new HttpRequestMessage(HttpMethod.Put, $"api/{ApiVersion}/documents/{docId}/replace")
+        var request = new HttpRequestMessage(HttpMethod.Put, $"api/{ApiVersion}/documents/{versionId}/replace")
         {
             Content = content
         };
