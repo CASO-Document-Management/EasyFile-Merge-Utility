@@ -10,7 +10,8 @@ public class RunSummary
     public int MultipleMatches { get; set; }
     public int DownloadFailed { get; set; }
     public int MergeFailed { get; set; }
-    public int ReplaceFailed { get; set; }
+    public int CheckoutFailed { get; set; }
+    public int CheckinFailed { get; set; }
     public int Error { get; set; }
     public DateTime StartedAt { get; set; }
     public DateTime CompletedAt { get; set; }
@@ -23,13 +24,14 @@ public class RunSummary
             case MergeStatus.NoIdentifier: NoIdentifier++; break;
             case MergeStatus.NoMatch: NoMatch++; break;
             case MergeStatus.MultipleMatches: MultipleMatches++; break;
+            case MergeStatus.CheckoutFailed: CheckoutFailed++; break;
             case MergeStatus.DownloadFailed: DownloadFailed++; break;
             case MergeStatus.MergeFailed: MergeFailed++; break;
-            case MergeStatus.ReplaceFailed: ReplaceFailed++; break;
+            case MergeStatus.CheckinFailed: CheckinFailed++; break;
             case MergeStatus.Error: Error++; break;
         }
     }
 
     public int TotalProcessed => Success + NoIdentifier + NoMatch + MultipleMatches
-        + DownloadFailed + MergeFailed + ReplaceFailed + Error;
+        + CheckoutFailed + DownloadFailed + MergeFailed + CheckinFailed + Error;
 }
