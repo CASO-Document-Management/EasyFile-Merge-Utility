@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MergeUtility.Console/MergeUtility.Console.csproj" />
+    <Project Path="src/MergeUtility.Core/MergeUtility.Core.csproj" />
+    <Project Path="src/MergeUtility.EasyFileREST/MergeUtility.EasyFileREST.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MergeUtility.Tests/MergeUtility.Tests.csproj" />
+  </Folder>
+</Solution>
