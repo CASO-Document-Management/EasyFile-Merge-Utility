@@ -40,6 +40,8 @@ public class MergeProcessor : IMergeProcessor
         string? tempBasePath = null;
         string? tempMergedPath = null;
         var opContext = MergeStatus.Error;
+        bool checkedOut = false;
+        int docId = 0;
 
         try
         {
@@ -62,8 +64,12 @@ public class MergeProcessor : IMergeProcessor
             if (exactMatches.Count > 1)
                 return record with { Status = MergeStatus.MultipleMatches, DurationMs = sw.ElapsedMilliseconds };
 
-            var docId = exactMatches[0].GetProperty("DOC_ID").GetInt32();
+            docId = exactMatches[0].GetProperty("DOC_ID").GetInt32();
             record = record with { TargetDocId = docId };
+
+            opContext = MergeStatus.CheckoutFailed;
+            await _documentSource.CheckoutAsync(docId, ct);
+            checkedOut = true;
 
             opContext = MergeStatus.DownloadFailed;
             tempBasePath = Path.Combine(_options.WorkingDirectory, $"base_{docId}_{Guid.NewGuid():N}.pdf");
@@ -80,9 +86,10 @@ public class MergeProcessor : IMergeProcessor
             opContext = MergeStatus.MergeFailed;
             await _pdfMergeService.MergeAsync(tempBasePath, file.FullPath, tempMergedPath, ct);
 
-            opContext = MergeStatus.ReplaceFailed;
-            await _documentSource.ReplaceAsync(docId, _options.CabinetName, tempMergedPath,
+            opContext = MergeStatus.CheckinFailed;
+            await _documentSource.CheckinAsync(docId, tempMergedPath,
                 $"Merged large format: {file.FileName}", ct);
+            checkedOut = false;
 
             return record with { Status = MergeStatus.Success, DurationMs = sw.ElapsedMilliseconds };
         }
@@ -98,6 +105,19 @@ public class MergeProcessor : IMergeProcessor
         }
         finally
         {
+            if (checkedOut)
+            {
+                try
+                {
+                    _logger.LogWarning("Undoing checkout for DOC_ID {DocId} after failure", docId);
+                    await _documentSource.UndoCheckoutAsync(docId, CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to undo checkout for DOC_ID {DocId}", docId);
+                }
+            }
+
             if (tempBasePath is not null && File.Exists(tempBasePath)) File.Delete(tempBasePath);
             if (tempMergedPath is not null && File.Exists(tempMergedPath)) File.Delete(tempMergedPath);
         }

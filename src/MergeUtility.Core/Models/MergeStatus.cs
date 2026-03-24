@@ -6,8 +6,9 @@ public enum MergeStatus
     NoIdentifier,
     NoMatch,
     MultipleMatches,
+    CheckoutFailed,
     DownloadFailed,
     MergeFailed,
-    ReplaceFailed,
+    CheckinFailed,
     Error
 }

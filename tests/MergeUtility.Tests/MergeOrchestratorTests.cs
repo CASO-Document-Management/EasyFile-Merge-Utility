@@ -191,7 +191,7 @@ public class MergeOrchestratorTests : IDisposable
         _processor.Setup(x => x.ProcessAsync(It.Is<PdfFileInfo>(f => f.FileName == "doc_LF001.pdf"), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ProcessingRecord { Status = MergeStatus.Success, FileName = "doc_LF001.pdf" });
         _processor.Setup(x => x.ProcessAsync(It.Is<PdfFileInfo>(f => f.FileName == "doc_LF002.pdf"), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ProcessingRecord { Status = MergeStatus.ReplaceFailed, FileName = "doc_LF002.pdf" });
+            .ReturnsAsync(new ProcessingRecord { Status = MergeStatus.CheckinFailed, FileName = "doc_LF002.pdf" });
 
         _report.Setup(x => x.WriteRecordAsync(It.IsAny<ProcessingRecord>())).Returns(Task.CompletedTask);
         _report.Setup(x => x.WriteSummaryAsync(It.IsAny<RunSummary>())).Returns(Task.CompletedTask);

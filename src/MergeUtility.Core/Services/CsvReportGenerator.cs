@@ -57,7 +57,8 @@ public class CsvReportGenerator : IReportGenerator, IAsyncDisposable
             await _writer.WriteLineAsync($"# Multiple Matches: {summary.MultipleMatches}");
             await _writer.WriteLineAsync($"# Download Failed: {summary.DownloadFailed}");
             await _writer.WriteLineAsync($"# Merge Failed: {summary.MergeFailed}");
-            await _writer.WriteLineAsync($"# Replace Failed: {summary.ReplaceFailed}");
+            await _writer.WriteLineAsync($"# Checkout Failed: {summary.CheckoutFailed}");
+            await _writer.WriteLineAsync($"# Checkin Failed: {summary.CheckinFailed}");
             await _writer.WriteLineAsync($"# Error: {summary.Error}");
             await _writer.FlushAsync();
         }

@@ -56,6 +56,18 @@ public class MergeProcessorTests : IDisposable
         return new DataResultResponse { Data = [element], TotalCount = 1 };
     }
 
+    private void SetupCheckout()
+    {
+        _document.Setup(x => x.CheckoutAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+    }
+
+    private void SetupUndoCheckout()
+    {
+        _document.Setup(x => x.UndoCheckoutAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+    }
+
     [Fact]
     public async Task ProcessAsync_NoIdentifier_ReturnsNoIdentifierStatus()
     {
@@ -100,11 +112,28 @@ public class MergeProcessorTests : IDisposable
     }
 
     [Fact]
-    public async Task ProcessAsync_DownloadFails_ReturnsDownloadFailedStatus()
+    public async Task ProcessAsync_CheckoutFails_ReturnsCheckoutFailedStatus()
     {
         _extractor.Setup(x => x.Extract(It.IsAny<string>())).Returns("ABC123");
         _cabinet.Setup(x => x.SearchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(MakeSearchResult(42, "ABC123"));
+        _document.Setup(x => x.CheckoutAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Document already checked out"));
+
+        var result = await CreateProcessor().ProcessAsync(MakeFile(), CancellationToken.None);
+
+        result.Status.Should().Be(MergeStatus.CheckoutFailed);
+        result.ErrorMessage.Should().Contain("already checked out");
+    }
+
+    [Fact]
+    public async Task ProcessAsync_DownloadFails_ReturnsDownloadFailedAndUndoesCheckout()
+    {
+        _extractor.Setup(x => x.Extract(It.IsAny<string>())).Returns("ABC123");
+        _cabinet.Setup(x => x.SearchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(MakeSearchResult(42, "ABC123"));
+        SetupCheckout();
+        SetupUndoCheckout();
         _document.Setup(x => x.DownloadAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("Connection failed"));
 
@@ -112,14 +141,17 @@ public class MergeProcessorTests : IDisposable
 
         result.Status.Should().Be(MergeStatus.DownloadFailed);
         result.ErrorMessage.Should().Be("Connection failed");
+        _document.Verify(x => x.UndoCheckoutAsync(42, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
-    public async Task ProcessAsync_MergeFails_ReturnsMergeFailedStatus()
+    public async Task ProcessAsync_MergeFails_ReturnsMergeFailedAndUndoesCheckout()
     {
         _extractor.Setup(x => x.Extract(It.IsAny<string>())).Returns("ABC123");
         _cabinet.Setup(x => x.SearchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(MakeSearchResult(42, "ABC123"));
+        SetupCheckout();
+        SetupUndoCheckout();
         _document.Setup(x => x.DownloadAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new MemoryStream(new byte[] { 1, 2, 3 }));
         _pdfMerge.Setup(x => x.MergeAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
@@ -129,24 +161,28 @@ public class MergeProcessorTests : IDisposable
 
         result.Status.Should().Be(MergeStatus.MergeFailed);
         result.ErrorMessage.Should().Contain("PDF open failed");
+        _document.Verify(x => x.UndoCheckoutAsync(42, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
-    public async Task ProcessAsync_ReplaceFails_ReturnsReplaceFailedStatus()
+    public async Task ProcessAsync_CheckinFails_ReturnsCheckinFailedAndUndoesCheckout()
     {
         _extractor.Setup(x => x.Extract(It.IsAny<string>())).Returns("ABC123");
         _cabinet.Setup(x => x.SearchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(MakeSearchResult(42, "ABC123"));
+        SetupCheckout();
+        SetupUndoCheckout();
         _document.Setup(x => x.DownloadAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new MemoryStream(new byte[] { 1, 2, 3 }));
         _pdfMerge.Setup(x => x.MergeAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((string b, string a, string o, CancellationToken _) => { File.WriteAllText(o, "merged"); return o; });
-        _document.Setup(x => x.ReplaceAsync(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new HttpRequestException("Replace failed"));
+        _document.Setup(x => x.CheckinAsync(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Checkin failed"));
 
         var result = await CreateProcessor().ProcessAsync(MakeFile(), CancellationToken.None);
 
-        result.Status.Should().Be(MergeStatus.ReplaceFailed);
+        result.Status.Should().Be(MergeStatus.CheckinFailed);
+        _document.Verify(x => x.UndoCheckoutAsync(42, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -155,11 +191,12 @@ public class MergeProcessorTests : IDisposable
         _extractor.Setup(x => x.Extract(It.IsAny<string>())).Returns("ABC123");
         _cabinet.Setup(x => x.SearchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(MakeSearchResult(42, "ABC123"));
+        SetupCheckout();
         _document.Setup(x => x.DownloadAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new MemoryStream(new byte[] { 1, 2, 3 }));
         _pdfMerge.Setup(x => x.MergeAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((string b, string a, string o, CancellationToken _) => { File.WriteAllText(o, "merged"); return o; });
-        _document.Setup(x => x.ReplaceAsync(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+        _document.Setup(x => x.CheckinAsync(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         var result = await CreateProcessor().ProcessAsync(MakeFile(), CancellationToken.None);
@@ -167,6 +204,7 @@ public class MergeProcessorTests : IDisposable
         result.Status.Should().Be(MergeStatus.Success);
         result.TargetDocId.Should().Be(42);
         result.Identifier.Should().Be("ABC123");
+        _document.Verify(x => x.UndoCheckoutAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -175,6 +213,8 @@ public class MergeProcessorTests : IDisposable
         _extractor.Setup(x => x.Extract(It.IsAny<string>())).Returns("ABC123");
         _cabinet.Setup(x => x.SearchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(MakeSearchResult(42, "ABC123"));
+        SetupCheckout();
+        SetupUndoCheckout();
         _document.Setup(x => x.DownloadAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("fail"));
 
