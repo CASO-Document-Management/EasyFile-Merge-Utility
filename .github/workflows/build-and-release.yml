@@ -1,0 +1,97 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [main]
+
+  workflow_dispatch:
+    inputs:
+      version_override:
+        description: 'Version override (e.g. 1.2.3). Leave blank to auto-detect from tags.'
+        required: false
+        default: ''
+      create_release:
+        description: 'Create a GitHub Release?'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          if [[ -n "${{ github.event.inputs.version_override }}" ]]; then
+            VERSION="${{ github.event.inputs.version_override }}"
+          else
+            LATEST_TAG=$(git describe --tags --match "v*" --abbrev=0 2>/dev/null || echo "")
+            if [[ -n "$LATEST_TAG" ]]; then
+              VERSION="${LATEST_TAG#v}"
+            else
+              VERSION="0.1.0-ci.${{ github.run_number }}"
+            fi
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: $VERSION"
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Restore NuGet packages
+        run: dotnet restore MergeUtility.slnx
+
+      - name: Build
+        run: dotnet build MergeUtility.slnx --configuration Release --no-restore
+
+      - name: Run tests
+        run: dotnet test MergeUtility.slnx --configuration Release --no-build --verbosity normal
+
+      - name: Publish self-contained executable
+        run: >
+          dotnet publish src/MergeUtility.Console/MergeUtility.Console.csproj
+          --configuration Release
+          --runtime win-x64
+          --self-contained true
+          /p:PublishSingleFile=true
+          /p:IncludeNativeLibrariesForSelfExtract=true
+          /p:Version=${{ steps.version.outputs.version }}
+          --output ./publish
+
+      - name: Create ZIP archive
+        shell: pwsh
+        run: |
+          Compress-Archive -Path ./publish/* -DestinationPath ./EasyFile.MergeUtility-v${{ steps.version.outputs.version }}.zip
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EasyFile.MergeUtility-v${{ steps.version.outputs.version }}
+          path: ./EasyFile.MergeUtility-v${{ steps.version.outputs.version }}.zip
+
+      - name: Create GitHub Release
+        if: >
+          github.ref == 'refs/heads/main' ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: Release v${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          files: ./EasyFile.MergeUtility-v${{ steps.version.outputs.version }}.zip
