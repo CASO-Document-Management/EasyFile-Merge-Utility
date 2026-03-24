@@ -62,7 +62,7 @@ public class MergeProcessor : IMergeProcessor
             if (exactMatches.Count > 1)
                 return record with { Status = MergeStatus.MultipleMatches, DurationMs = sw.ElapsedMilliseconds };
 
-            var docId = exactMatches[0].GetProperty("docID").GetInt32();
+            var docId = exactMatches[0].GetProperty("DOC_ID").GetInt32();
             record = record with { TargetDocId = docId };
 
             opContext = MergeStatus.DownloadFailed;

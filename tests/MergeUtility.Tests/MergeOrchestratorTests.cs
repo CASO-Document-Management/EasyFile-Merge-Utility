@@ -12,6 +12,7 @@ namespace MergeUtility.Tests;
 public class MergeOrchestratorTests : IDisposable
 {
     private readonly Mock<IFileScanner> _scanner = new();
+    private readonly Mock<IIdentifierExtractor> _extractor = new();
     private readonly Mock<IMergeProcessor> _processor = new();
     private readonly Mock<IReportGenerator> _report = new();
     private readonly string _tempDir;
@@ -22,6 +23,14 @@ public class MergeOrchestratorTests : IDisposable
         _tempDir = Path.Combine(Path.GetTempPath(), $"OrchestratorTests_{Guid.NewGuid():N}");
         Directory.CreateDirectory(_tempDir);
         _processedLogPath = Path.Combine(_tempDir, "processed-files.txt");
+
+        // Default: extract identifier by stripping _LF###.pdf suffix
+        _extractor.Setup(x => x.Extract(It.IsAny<string>()))
+            .Returns((string fn) =>
+            {
+                var idx = fn.IndexOf("_LF", StringComparison.OrdinalIgnoreCase);
+                return idx > 0 ? fn[..idx] : null;
+            });
     }
 
     private (MergeOrchestrator orchestrator, ProcessedFileLog log) Create(string[]? alreadyProcessed = null)
@@ -37,6 +46,7 @@ public class MergeOrchestratorTests : IDisposable
         var log = new ProcessedFileLog(options);
         var orchestrator = new MergeOrchestrator(
             _scanner.Object,
+            _extractor.Object,
             _processor.Object,
             _report.Object,
             log,
@@ -64,8 +74,9 @@ public class MergeOrchestratorTests : IDisposable
     }
 
     [Fact]
-    public async Task RunAsync_MixedResults_TalliesCorrectly()
+    public async Task RunAsync_DifferentGroups_TalliedIndependently()
     {
+        // Three files, each with a different identifier → three separate groups
         var files = new[]
         {
             MakeFile("file1_LF001.pdf"),
@@ -74,9 +85,11 @@ public class MergeOrchestratorTests : IDisposable
         };
         _scanner.Setup(x => x.Scan()).Returns(files);
 
-        _processor.SetupSequence(x => x.ProcessAsync(It.IsAny<PdfFileInfo>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ProcessingRecord { Status = MergeStatus.Success, FileName = "file1_LF001.pdf" })
-            .ReturnsAsync(new ProcessingRecord { Status = MergeStatus.NoMatch, FileName = "file2_LF001.pdf" })
+        _processor.Setup(x => x.ProcessAsync(It.Is<PdfFileInfo>(f => f.FileName == "file1_LF001.pdf"), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessingRecord { Status = MergeStatus.Success, FileName = "file1_LF001.pdf" });
+        _processor.Setup(x => x.ProcessAsync(It.Is<PdfFileInfo>(f => f.FileName == "file2_LF001.pdf"), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessingRecord { Status = MergeStatus.NoMatch, FileName = "file2_LF001.pdf" });
+        _processor.Setup(x => x.ProcessAsync(It.Is<PdfFileInfo>(f => f.FileName == "file3_LF001.pdf"), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ProcessingRecord { Status = MergeStatus.DownloadFailed, FileName = "file3_LF001.pdf" });
 
         _report.Setup(x => x.WriteRecordAsync(It.IsAny<ProcessingRecord>())).Returns(Task.CompletedTask);
@@ -94,44 +107,146 @@ public class MergeOrchestratorTests : IDisposable
     }
 
     [Fact]
-    public async Task RunAsync_AlreadyProcessedFile_SkipsProcessAsync()
+    public async Task RunAsync_AlreadyProcessedGroup_SkipsEntireGroup()
     {
         var files = new[]
         {
-            MakeFile("file1_LF001.pdf"),
-            MakeFile("file2_LF001.pdf"),
+            MakeFile("doc_LF001.pdf"),
+            MakeFile("doc_LF002.pdf"),
         };
         _scanner.Setup(x => x.Scan()).Returns(files);
+        _report.Setup(x => x.WriteSummaryAsync(It.IsAny<RunSummary>())).Returns(Task.CompletedTask);
+
+        var (orchestrator, _) = Create(alreadyProcessed: ["doc_LF001.pdf", "doc_LF002.pdf"]);
+        await orchestrator.RunAsync(CancellationToken.None);
+
+        _processor.Verify(x => x.ProcessAsync(It.IsAny<PdfFileInfo>(), It.IsAny<CancellationToken>()), Times.Never);
+        _report.Verify(x => x.WriteSummaryAsync(
+            It.Is<RunSummary>(s => s.Skipped == 2 && s.TotalFilesFound == 2)), Times.Once);
+    }
+
+    [Fact]
+    public async Task RunAsync_GroupSuccess_AllFilesMarkedProcessed()
+    {
+        // Two files with same identifier → one group
+        var files = new[]
+        {
+            MakeFile("doc_LF001.pdf"),
+            MakeFile("doc_LF002.pdf"),
+        };
+        _scanner.Setup(x => x.Scan()).Returns(files);
+
         _processor.Setup(x => x.ProcessAsync(It.IsAny<PdfFileInfo>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ProcessingRecord { Status = MergeStatus.Success });
+            .ReturnsAsync((PdfFileInfo f, CancellationToken _) =>
+                new ProcessingRecord { Status = MergeStatus.Success, FileName = f.FileName });
+
         _report.Setup(x => x.WriteRecordAsync(It.IsAny<ProcessingRecord>())).Returns(Task.CompletedTask);
         _report.Setup(x => x.WriteSummaryAsync(It.IsAny<RunSummary>())).Returns(Task.CompletedTask);
 
-        // file1 is already processed
-        var (orchestrator, _) = Create(alreadyProcessed: ["file1_LF001.pdf"]);
+        var (orchestrator, log) = Create();
         await orchestrator.RunAsync(CancellationToken.None);
 
-        // ProcessAsync should only be called for file2
+        log.IsProcessed("doc_LF001.pdf").Should().BeTrue();
+        log.IsProcessed("doc_LF002.pdf").Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task RunAsync_GroupPartialFailure_NoFilesMarkedProcessed()
+    {
+        // Two files with same identifier, second one fails
+        var files = new[]
+        {
+            MakeFile("doc_LF001.pdf"),
+            MakeFile("doc_LF002.pdf"),
+        };
+        _scanner.Setup(x => x.Scan()).Returns(files);
+
+        _processor.Setup(x => x.ProcessAsync(It.Is<PdfFileInfo>(f => f.FileName == "doc_LF001.pdf"), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessingRecord { Status = MergeStatus.Success, FileName = "doc_LF001.pdf" });
+        _processor.Setup(x => x.ProcessAsync(It.Is<PdfFileInfo>(f => f.FileName == "doc_LF002.pdf"), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessingRecord { Status = MergeStatus.MergeFailed, FileName = "doc_LF002.pdf", ErrorMessage = "PDF error" });
+
+        _report.Setup(x => x.WriteRecordAsync(It.IsAny<ProcessingRecord>())).Returns(Task.CompletedTask);
+        _report.Setup(x => x.WriteSummaryAsync(It.IsAny<RunSummary>())).Returns(Task.CompletedTask);
+
+        var (orchestrator, log) = Create();
+        await orchestrator.RunAsync(CancellationToken.None);
+
+        // Neither file should be marked processed since the group failed
+        log.IsProcessed("doc_LF001.pdf").Should().BeFalse();
+        log.IsProcessed("doc_LF002.pdf").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task RunAsync_GroupPartialFailure_StopsProcessingRemainingFilesInGroup()
+    {
+        var files = new[]
+        {
+            MakeFile("doc_LF001.pdf"),
+            MakeFile("doc_LF002.pdf"),
+            MakeFile("doc_LF003.pdf"),
+        };
+        _scanner.Setup(x => x.Scan()).Returns(files);
+
+        _processor.Setup(x => x.ProcessAsync(It.Is<PdfFileInfo>(f => f.FileName == "doc_LF001.pdf"), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessingRecord { Status = MergeStatus.Success, FileName = "doc_LF001.pdf" });
+        _processor.Setup(x => x.ProcessAsync(It.Is<PdfFileInfo>(f => f.FileName == "doc_LF002.pdf"), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessingRecord { Status = MergeStatus.ReplaceFailed, FileName = "doc_LF002.pdf" });
+
+        _report.Setup(x => x.WriteRecordAsync(It.IsAny<ProcessingRecord>())).Returns(Task.CompletedTask);
+        _report.Setup(x => x.WriteSummaryAsync(It.IsAny<RunSummary>())).Returns(Task.CompletedTask);
+
+        var (orchestrator, _) = Create();
+        await orchestrator.RunAsync(CancellationToken.None);
+
+        // LF003 should never be called because LF002 failed
         _processor.Verify(x => x.ProcessAsync(
-            It.Is<PdfFileInfo>(f => f.FileName == "file2_LF001.pdf"),
-            It.IsAny<CancellationToken>()), Times.Once);
-        _processor.Verify(x => x.ProcessAsync(
-            It.Is<PdfFileInfo>(f => f.FileName == "file1_LF001.pdf"),
+            It.Is<PdfFileInfo>(f => f.FileName == "doc_LF003.pdf"),
             It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
-    public async Task RunAsync_SkippedFilesCountedInSummary()
+    public async Task RunAsync_MixedGroups_FailedGroupDoesNotAffectOther()
     {
-        var files = new[] { MakeFile("file1_LF001.pdf") };
+        var files = new[]
+        {
+            MakeFile("alpha_LF001.pdf"),  // group "alpha"
+            MakeFile("beta_LF001.pdf"),   // group "beta"
+        };
         _scanner.Setup(x => x.Scan()).Returns(files);
+
+        // alpha fails, beta succeeds
+        _processor.Setup(x => x.ProcessAsync(It.Is<PdfFileInfo>(f => f.FileName == "alpha_LF001.pdf"), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessingRecord { Status = MergeStatus.DownloadFailed, FileName = "alpha_LF001.pdf" });
+        _processor.Setup(x => x.ProcessAsync(It.Is<PdfFileInfo>(f => f.FileName == "beta_LF001.pdf"), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessingRecord { Status = MergeStatus.Success, FileName = "beta_LF001.pdf" });
+
+        _report.Setup(x => x.WriteRecordAsync(It.IsAny<ProcessingRecord>())).Returns(Task.CompletedTask);
         _report.Setup(x => x.WriteSummaryAsync(It.IsAny<RunSummary>())).Returns(Task.CompletedTask);
 
-        var (orchestrator, _) = Create(alreadyProcessed: ["file1_LF001.pdf"]);
+        var (orchestrator, log) = Create();
         await orchestrator.RunAsync(CancellationToken.None);
 
-        _report.Verify(x => x.WriteSummaryAsync(
-            It.Is<RunSummary>(s => s.Skipped == 1 && s.TotalFilesFound == 1)), Times.Once);
+        log.IsProcessed("alpha_LF001.pdf").Should().BeFalse();
+        log.IsProcessed("beta_LF001.pdf").Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task RunAsync_NoIdentifierFiles_ReportedAsNoIdentifier()
+    {
+        _extractor.Setup(x => x.Extract("badfile.pdf")).Returns((string?)null);
+
+        var files = new[] { MakeFile("badfile.pdf") };
+        _scanner.Setup(x => x.Scan()).Returns(files);
+        _report.Setup(x => x.WriteRecordAsync(It.IsAny<ProcessingRecord>())).Returns(Task.CompletedTask);
+        _report.Setup(x => x.WriteSummaryAsync(It.IsAny<RunSummary>())).Returns(Task.CompletedTask);
+
+        var (orchestrator, _) = Create();
+        await orchestrator.RunAsync(CancellationToken.None);
+
+        _report.Verify(x => x.WriteRecordAsync(
+            It.Is<ProcessingRecord>(r => r.Status == MergeStatus.NoIdentifier)), Times.Once);
+        _processor.VerifyNoOtherCalls();
     }
 
     public void Dispose()

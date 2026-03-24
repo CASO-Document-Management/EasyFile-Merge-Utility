@@ -51,7 +51,7 @@ public class MergeProcessorTests : IDisposable
 
     private static DataResultResponse MakeSearchResult(int docId, string keyValue)
     {
-        var json = $"{{\"docID\":{docId},\"DocumentKey\":\"{keyValue}\"}}";
+        var json = $"{{\"DOC_ID\":{docId},\"DocumentKey\":\"{keyValue}\"}}";
         var element = JsonSerializer.Deserialize<JsonElement>(json);
         return new DataResultResponse { Data = [element], TotalCount = 1 };
     }
@@ -84,8 +84,8 @@ public class MergeProcessorTests : IDisposable
     {
         _extractor.Setup(x => x.Extract(It.IsAny<string>())).Returns("ABC123");
 
-        var json1 = "{\"docID\":1,\"DocumentKey\":\"ABC123\"}";
-        var json2 = "{\"docID\":2,\"DocumentKey\":\"ABC123\"}";
+        var json1 = "{\"DOC_ID\":1,\"DocumentKey\":\"ABC123\"}";
+        var json2 = "{\"DOC_ID\":2,\"DocumentKey\":\"ABC123\"}";
         var result1 = new DataResultResponse
         {
             Data = [JsonSerializer.Deserialize<JsonElement>(json1), JsonSerializer.Deserialize<JsonElement>(json2)],

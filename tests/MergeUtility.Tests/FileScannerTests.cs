@@ -58,7 +58,7 @@ public class FileScannerTests : IDisposable
     }
 
     [Fact]
-    public void Scan_Subdirectory_NotIncluded()
+    public void Scan_Subdirectory_IsIncluded()
     {
         var subDir = Directory.CreateDirectory(Path.Combine(_tempDir, "sub"));
         File.WriteAllText(Path.Combine(subDir.FullName, "doc1_LF001.pdf"), "");
@@ -67,8 +67,7 @@ public class FileScannerTests : IDisposable
         var scanner = CreateScanner();
         var results = scanner.Scan().ToList();
 
-        results.Should().HaveCount(1);
-        results[0].FileName.Should().Be("doc2_LF001.pdf");
+        results.Should().HaveCount(2);
     }
 
     [Fact]
@@ -83,6 +82,27 @@ public class FileScannerTests : IDisposable
         result.FileName.Should().Be("ABC123_LF001.pdf");
         result.FullPath.Should().Be(filePath);
         result.SizeBytes.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public void Scan_ReturnsFilesOrderedByIdentifierThenLfNumber()
+    {
+        // Create files deliberately out of order
+        File.WriteAllText(Path.Combine(_tempDir, "doc_LF003.pdf"), "");
+        File.WriteAllText(Path.Combine(_tempDir, "doc_LF001.pdf"), "");
+        File.WriteAllText(Path.Combine(_tempDir, "doc_LF002.pdf"), "");
+        File.WriteAllText(Path.Combine(_tempDir, "alpha_LF002.pdf"), "");
+        File.WriteAllText(Path.Combine(_tempDir, "alpha_LF001.pdf"), "");
+
+        var scanner = CreateScanner();
+        var results = scanner.Scan().Select(f => f.FileName).ToList();
+
+        results.Should().ContainInOrder(
+            "alpha_LF001.pdf",
+            "alpha_LF002.pdf",
+            "doc_LF001.pdf",
+            "doc_LF002.pdf",
+            "doc_LF003.pdf");
     }
 
     [Fact]
