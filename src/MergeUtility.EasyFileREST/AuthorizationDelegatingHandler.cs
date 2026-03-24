@@ -53,6 +53,9 @@ public class AuthorizationDelegatingHandler : DelegatingHandler
 
         if (!string.IsNullOrEmpty(_options.CallingApp))
             request.Headers.TryAddWithoutValidation("X-Calling-App", _options.CallingApp);
+
+        if (!string.IsNullOrEmpty(_options.ProfileKey))
+            request.Headers.TryAddWithoutValidation("X-Profile-Key", _options.ProfileKey);
     }
 
     private static async Task<HttpRequestMessage> CloneRequestAsync(HttpRequestMessage original)
