@@ -1,23 +1,34 @@
+using System.Text.Json;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using MergeUtility.Core.Interfaces;
+using MergeUtility.Core.Models.Configuration;
 
 namespace MergeUtility.Console;
 
 internal sealed class ConnectionTestWorker : BackgroundService
 {
     private readonly ITokenManager _tokenManager;
+    private readonly ICabinetService _cabinetService;
+    private readonly MergeOptions _mergeOptions;
     private readonly IHostApplicationLifetime _lifetime;
     private readonly ILogger<ConnectionTestWorker> _logger;
+    private readonly string[] _args;
 
     public ConnectionTestWorker(
         ITokenManager tokenManager,
+        ICabinetService cabinetService,
+        IOptions<MergeOptions> mergeOptions,
         IHostApplicationLifetime lifetime,
         ILogger<ConnectionTestWorker> logger)
     {
         _tokenManager = tokenManager;
+        _cabinetService = cabinetService;
+        _mergeOptions = mergeOptions.Value;
         _lifetime = lifetime;
         _logger = logger;
+        _args = Environment.GetCommandLineArgs();
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -32,6 +43,11 @@ internal sealed class ConnectionTestWorker : BackgroundService
             System.Console.WriteLine($"     Expires: {_tokenManager.TokenExpiry:u}");
             _logger.LogInformation("Connection test passed. User={User} Expiry={Expiry}",
                 _tokenManager.CurrentUser, _tokenManager.TokenExpiry);
+
+            if (_args.Any(a => a == "--test-search"))
+            {
+                await TestSearchAsync(stoppingToken);
+            }
         }
         catch (HttpRequestException ex)
         {
@@ -46,6 +62,37 @@ internal sealed class ConnectionTestWorker : BackgroundService
         finally
         {
             _lifetime.StopApplication();
+        }
+    }
+
+    private async Task TestSearchAsync(CancellationToken ct)
+    {
+        var cabinet = _mergeOptions.CabinetName;
+        var field = _mergeOptions.SearchFieldName;
+        var testValue = "RANCH-0001";
+
+        System.Console.WriteLine();
+        System.Console.WriteLine($"Testing search: cabinet={cabinet}, field=\"{field}\", value=\"{testValue}\"...");
+
+        try
+        {
+            var result = await _cabinetService.SearchAsync(cabinet, field, testValue, ct);
+
+            System.Console.WriteLine($"[OK] Search returned {result.Data.Count} row(s) (TotalCount={result.TotalCount})");
+
+            foreach (var row in result.Data.Take(5))
+            {
+                System.Console.WriteLine($"     {row.ToString()[..Math.Min(row.ToString().Length, 200)]}");
+            }
+
+            _logger.LogInformation("Search test passed. Rows={Count} Total={Total}", result.Data.Count, result.TotalCount);
+        }
+        catch (HttpRequestException ex)
+        {
+            System.Console.WriteLine($"[FAIL] Search failed: {ex.Message}");
+            System.Console.WriteLine($"       Status: {ex.StatusCode}");
+            _logger.LogError(ex, "Search test failed");
+            throw;
         }
     }
 }

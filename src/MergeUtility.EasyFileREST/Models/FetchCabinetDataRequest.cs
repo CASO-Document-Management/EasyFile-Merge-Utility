@@ -14,5 +14,5 @@ public class FetchCabinetDataRequest
     public string GatewayCriteria { get; set; } = string.Empty;
     public string FullTextSearchType { get; set; } = string.Empty;
     public string AppName { get; set; } = string.Empty;
-    public string SearchOption { get; set; } = string.Empty;
+    public string SearchOption { get; set; } = "{}";
 }

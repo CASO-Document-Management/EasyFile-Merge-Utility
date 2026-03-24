@@ -16,8 +16,9 @@ if (args.Contains("--encrypt-keys"))
 }
 
 bool isConnectionTest = args.Contains("--test-connection");
+bool isSearchTest = args.Contains("--test-search");
 
-var hostArgs = args.Where(a => !a.StartsWith("--test-connection") && !a.StartsWith("--encrypt-keys")).ToArray();
+var hostArgs = args.Where(a => !a.StartsWith("--test-connection") && !a.StartsWith("--encrypt-keys") && !a.StartsWith("--test-search")).ToArray();
 
 var host = Host.CreateDefaultBuilder(hostArgs)
     .UseContentRoot(AppContext.BaseDirectory)
@@ -42,7 +43,6 @@ var host = Host.CreateDefaultBuilder(hostArgs)
         // Configuration binding
         services.Configure<EasyFileApiOptions>(ctx.Configuration.GetSection("EasyFileApi"));
         services.Configure<MergeOptions>(ctx.Configuration.GetSection("MergeOptions"));
-        services.Configure<RetryPolicyOptions>(ctx.Configuration.GetSection("RetryPolicy"));
         services.AddSingleton<IConfigureOptions<EasyFileApiOptions>, DecryptEasyFileApiOptions>();
 
         // Core services
@@ -97,7 +97,7 @@ var host = Host.CreateDefaultBuilder(hostArgs)
             options.Retry.BackoffType = Polly.DelayBackoffType.Exponential;
         });
 
-        if (isConnectionTest)
+        if (isConnectionTest || isSearchTest)
             services.AddHostedService<ConnectionTestWorker>();
         else
             services.AddHostedService<MergeWorker>();

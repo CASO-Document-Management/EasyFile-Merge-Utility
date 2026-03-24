@@ -13,9 +13,11 @@ public abstract class BaseEasyFileService
     protected readonly HttpClient _httpClient;
     protected readonly ITokenManager _tokenManager;
 
-    private static readonly JsonSerializerOptions _jsonOptions = new()
+    private static readonly JsonSerializerOptions _jsonOptions = new();
+
+    private static readonly JsonSerializerOptions _deserializeOptions = new()
     {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        PropertyNameCaseInsensitive = true
     };
 
     protected BaseEasyFileService(HttpClient httpClient, ITokenManager tokenManager)
@@ -50,10 +52,7 @@ public abstract class BaseEasyFileService
             throw new HttpRequestException(errorMsg, null, response.StatusCode);
         }
 
-        var result = JsonSerializer.Deserialize<ApiResponse<T>>(content, new JsonSerializerOptions
-        {
-            PropertyNameCaseInsensitive = true
-        });
+        var result = JsonSerializer.Deserialize<ApiResponse<T>>(content, _deserializeOptions);
 
         if (result == null)
             throw new InvalidOperationException("Failed to deserialize API response");

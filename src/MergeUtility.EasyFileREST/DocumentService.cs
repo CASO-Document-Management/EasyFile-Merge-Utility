@@ -21,9 +21,10 @@ public class DocumentService : BaseEasyFileService, IDocumentSource
             throw new HttpRequestException(msg, null, response.StatusCode);
         }
 
-        // Return the response stream directly — caller is responsible for disposing.
-        // The HttpResponseMessage is not disposed here because the stream is backed by the connection.
-        return await response.Content.ReadAsStreamAsync(ct);
+        // Wrap the stream so that disposing it also disposes the HttpResponseMessage,
+        // which releases the underlying connection back to the pool.
+        var stream = await response.Content.ReadAsStreamAsync(ct);
+        return new ResponseOwningStream(stream, response);
     }
 
     public async Task ReplaceAsync(int docId, string mergedFilePath, string comments, CancellationToken ct)
