@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Text.Json;
 using MergeUtility.Core.Interfaces;
 
 namespace MergeUtility.EasyFileREST;
@@ -10,9 +11,12 @@ public class DocumentService : BaseEasyFileService, IDocumentSource
 
     public async Task<Stream> DownloadAsync(int docId, CancellationToken ct)
     {
-        var request = new HttpRequestMessage(HttpMethod.Get, $"api/{ApiVersion}/documents/{docId}/download");
+        var versionId = await ResolveLatestVersionIdAsync(docId, ct);
+        var request = new HttpRequestMessage(HttpMethod.Get, $"api/{ApiVersion}/documents/{versionId}/download");
+        request.Headers.AcceptEncoding.Clear();
+        request.Headers.Add("Accept-Encoding", "identity");
+        var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseContentRead, ct);
 
-        var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(ct);
@@ -21,13 +25,15 @@ public class DocumentService : BaseEasyFileService, IDocumentSource
             throw new HttpRequestException(msg, null, response.StatusCode);
         }
 
-        var stream = await response.Content.ReadAsStreamAsync(ct);
-        return new ResponseOwningStream(stream, response);
+        var bytes = await response.Content.ReadAsByteArrayAsync(ct);
+        response.Dispose();
+        return new MemoryStream(bytes);
     }
 
     public async Task CheckoutAsync(int docId, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, $"api/{ApiVersion}/documents/{docId}/checkout");
+        request.Content = new StringContent(string.Empty);
         var response = await _httpClient.SendAsync(request, ct);
 
         if (!response.IsSuccessStatusCode)
@@ -67,6 +73,7 @@ public class DocumentService : BaseEasyFileService, IDocumentSource
     public async Task UndoCheckoutAsync(int docId, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, $"api/{ApiVersion}/documents/{docId}/undo-checkout");
+        request.Content = new StringContent(string.Empty);
         var response = await _httpClient.SendAsync(request, ct);
 
         // Best-effort — don't throw on failure during cleanup
@@ -76,5 +83,22 @@ public class DocumentService : BaseEasyFileService, IDocumentSource
             var msg = ApiErrorHelper.ParseErrorResponse(response, body);
             System.Diagnostics.Debug.WriteLine($"UndoCheckout failed for doc {docId}: {msg}");
         }
+    }
+
+    private async Task<int> ResolveLatestVersionIdAsync(int docId, CancellationToken ct)
+    {
+        var response = await GetAsync<List<JsonElement>>($"api/{ApiVersion}/documents/{docId}", ct);
+        var versions = response.Data;
+
+        if (versions == null || versions.Count == 0)
+            throw new HttpRequestException($"No document versions found for DOC_ID {docId}");
+
+        var latest = versions
+            .OrderByDescending(v =>
+                v.TryGetProperty("revisionNo", out var rev) &&
+                int.TryParse(rev.GetString(), out var r) ? r : 0)
+            .First();
+
+        return int.Parse(latest.GetProperty("id").GetString()!);
     }
 }

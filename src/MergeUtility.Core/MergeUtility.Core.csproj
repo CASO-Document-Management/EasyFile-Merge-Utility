@@ -10,7 +10,6 @@
     <PackageReference Include="CsvHelper" Version="33.*" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.*" />
     <PackageReference Include="Microsoft.Extensions.Options" Version="9.*" />
-    <PackageReference Include="PdfSharpCore" Version="1.3.*" />
   </ItemGroup>
 
 </Project>

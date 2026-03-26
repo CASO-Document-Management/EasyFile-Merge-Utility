@@ -81,6 +81,9 @@ public class MergeProcessor : IMergeProcessor
                 await downloadStream.CopyToAsync(fs, ct);
             }
 
+            var downloadedSize = new FileInfo(tempBasePath).Length;
+            _logger.LogInformation("Downloaded base PDF: {Path} ({Size} bytes)", tempBasePath, downloadedSize);
+
             tempMergedPath = Path.Combine(_options.WorkingDirectory, $"merge_{docId}_{Guid.NewGuid():N}.pdf");
 
             opContext = MergeStatus.MergeFailed;
@@ -121,6 +124,109 @@ public class MergeProcessor : IMergeProcessor
             if (tempBasePath is not null && File.Exists(tempBasePath)) File.Delete(tempBasePath);
             if (tempMergedPath is not null && File.Exists(tempMergedPath)) File.Delete(tempMergedPath);
         }
+    }
+
+    public async Task<List<ProcessingRecord>> ProcessGroupAsync(string identifier, IReadOnlyList<PdfFileInfo> files, CancellationToken ct)
+    {
+        var sw = Stopwatch.StartNew();
+        var records = files.Select(f => new ProcessingRecord
+        {
+            Timestamp = DateTime.UtcNow,
+            FileName = f.FileName,
+            Identifier = identifier
+        }).ToList();
+
+        string? tempBasePath = null;
+        string? tempMergedPath = null;
+        bool checkedOut = false;
+        int docId = 0;
+
+        try
+        {
+            // Search once for the group
+            var searchResult = await _cabinetService.SearchAsync(
+                _options.CabinetName, _options.SearchFieldName, identifier, ct);
+
+            var exactMatches = searchResult.Data
+                .Where(row => GetStringField(row, _options.SearchFieldName)
+                    ?.Equals(identifier, StringComparison.OrdinalIgnoreCase) == true)
+                .ToList();
+
+            if (exactMatches.Count == 0)
+                return SetAllStatuses(records, MergeStatus.NoMatch, sw);
+            if (exactMatches.Count > 1)
+                return SetAllStatuses(records, MergeStatus.MultipleMatches, sw);
+
+            docId = exactMatches[0].GetProperty("DOC_ID").GetInt32();
+            for (int i = 0; i < records.Count; i++)
+                records[i] = records[i] with { TargetDocId = docId };
+
+            // Checkout once
+            await _documentSource.CheckoutAsync(docId, ct);
+            checkedOut = true;
+
+            // Download base once
+            tempBasePath = Path.Combine(_options.WorkingDirectory, $"base_{docId}_{Guid.NewGuid():N}.pdf");
+            Directory.CreateDirectory(_options.WorkingDirectory);
+
+            await using (var downloadStream = await _documentSource.DownloadAsync(docId, ct))
+            await using (var fs = File.Create(tempBasePath))
+            {
+                await downloadStream.CopyToAsync(fs, ct);
+            }
+
+            var downloadedSize = new FileInfo(tempBasePath).Length;
+            _logger.LogInformation("Downloaded base PDF: {Path} ({Size} bytes)", tempBasePath, downloadedSize);
+
+            // Merge all files at once
+            tempMergedPath = Path.Combine(_options.WorkingDirectory, $"merge_{docId}_{Guid.NewGuid():N}.pdf");
+            var appendPaths = files.Select(f => f.FullPath).ToList();
+            await _pdfMergeService.MergeAsync(tempBasePath, appendPaths, tempMergedPath, ct);
+
+            // Checkin once
+            var comment = $"Merged {files.Count} large format file(s)";
+            await _documentSource.CheckinAsync(docId, tempMergedPath, comment, ct);
+            checkedOut = false;
+
+            return SetAllStatuses(records, MergeStatus.Success, sw);
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogError(ex, "HTTP error processing group '{Identifier}'", identifier);
+            return SetAllStatuses(records, MergeStatus.Error, sw, ex.Message);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error processing group '{Identifier}'", identifier);
+            return SetAllStatuses(records, MergeStatus.Error, sw, ex.Message);
+        }
+        finally
+        {
+            if (checkedOut)
+            {
+                try
+                {
+                    _logger.LogWarning("Undoing checkout for DOC_ID {DocId} after failure", docId);
+                    await _documentSource.UndoCheckoutAsync(docId, CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to undo checkout for DOC_ID {DocId}", docId);
+                }
+            }
+
+            if (tempBasePath is not null && File.Exists(tempBasePath)) File.Delete(tempBasePath);
+            if (tempMergedPath is not null && File.Exists(tempMergedPath)) File.Delete(tempMergedPath);
+        }
+    }
+
+    private static List<ProcessingRecord> SetAllStatuses(
+        List<ProcessingRecord> records, MergeStatus status, Stopwatch sw, string? error = null)
+    {
+        var elapsed = sw.ElapsedMilliseconds;
+        for (int i = 0; i < records.Count; i++)
+            records[i] = records[i] with { Status = status, DurationMs = elapsed, ErrorMessage = error };
+        return records;
     }
 
     private static string? GetStringField(JsonElement row, string fieldName)
