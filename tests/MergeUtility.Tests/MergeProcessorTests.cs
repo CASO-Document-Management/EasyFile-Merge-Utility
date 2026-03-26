@@ -225,6 +225,62 @@ public class MergeProcessorTests : IDisposable
         tempFiles.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task ProcessGroupAsync_Success_SingleCheckoutAndCheckin()
+    {
+        var files = new PdfFileInfo[]
+        {
+            new() { FileName = "ABC123_LF001.pdf", FullPath = _sourcePdfPath, SizeBytes = 100 },
+            new() { FileName = "ABC123_LF002.pdf", FullPath = _sourcePdfPath, SizeBytes = 100 },
+            new() { FileName = "ABC123_LF003.pdf", FullPath = _sourcePdfPath, SizeBytes = 100 },
+        };
+
+        _cabinet.Setup(x => x.SearchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(MakeSearchResult(42, "ABC123"));
+        SetupCheckout();
+        _document.Setup(x => x.DownloadAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MemoryStream(new byte[] { 1, 2, 3 }));
+        _pdfMerge.Setup(x => x.MergeAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string b, IReadOnlyList<string> a, string o, CancellationToken _) => { File.WriteAllText(o, "merged"); return o; });
+        _document.Setup(x => x.CheckinAsync(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        var results = await CreateProcessor().ProcessGroupAsync("ABC123", files, CancellationToken.None);
+
+        results.Should().HaveCount(3);
+        results.Should().OnlyContain(r => r.Status == MergeStatus.Success);
+        results.Should().OnlyContain(r => r.TargetDocId == 42);
+
+        // Checkout and checkin called exactly once each
+        _document.Verify(x => x.CheckoutAsync(42, It.IsAny<CancellationToken>()), Times.Once);
+        _document.Verify(x => x.CheckinAsync(42, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+        _document.Verify(x => x.DownloadAsync(42, It.IsAny<CancellationToken>()), Times.Once);
+
+        // Batch merge called with all 3 file paths
+        _pdfMerge.Verify(x => x.MergeAsync(It.IsAny<string>(),
+            It.Is<IReadOnlyList<string>>(list => list.Count == 3),
+            It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ProcessGroupAsync_NoMatch_AllRecordsGetNoMatchStatus()
+    {
+        var files = new PdfFileInfo[]
+        {
+            new() { FileName = "ABC123_LF001.pdf", FullPath = _sourcePdfPath, SizeBytes = 100 },
+            new() { FileName = "ABC123_LF002.pdf", FullPath = _sourcePdfPath, SizeBytes = 100 },
+        };
+
+        _cabinet.Setup(x => x.SearchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new DataResultResponse { Data = [], TotalCount = 0 });
+
+        var results = await CreateProcessor().ProcessGroupAsync("ABC123", files, CancellationToken.None);
+
+        results.Should().HaveCount(2);
+        results.Should().OnlyContain(r => r.Status == MergeStatus.NoMatch);
+        _document.Verify(x => x.CheckoutAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_tempDir))

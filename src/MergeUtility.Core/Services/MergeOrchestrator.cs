@@ -37,6 +37,7 @@ public class MergeOrchestrator : IMergeOrchestrator
     public async Task RunAsync(CancellationToken ct)
     {
         var summary = new RunSummary { StartedAt = DateTime.UtcNow };
+        var groupSummaries = new List<(string Identifier, int? DocId, int FileCount, MergeStatus Status, string? Error)>();
 
         SweepTempDirectory();
 
@@ -87,28 +88,19 @@ public class MergeOrchestrator : IMergeOrchestrator
                     _logger.LogInformation("[Skipped] {File} — already processed", f.FileName);
                     summary.Skipped++;
                 }
+                groupSummaries.Add((identifier, null, groupFiles.Count, MergeStatus.Success, "Skipped"));
                 continue;
             }
 
             _logger.LogInformation("Processing group '{Identifier}' ({Count} file(s))",
                 identifier, groupFiles.Count);
 
-            var groupRecords = new List<ProcessingRecord>();
-            var groupSuccess = true;
+            var groupRecords = await _mergeProcessor.ProcessGroupAsync(identifier, groupFiles, ct);
+            var groupSuccess = groupRecords.All(r => r.Status == MergeStatus.Success);
+            var firstRecord = groupRecords[0];
 
-            foreach (var file in groupFiles)
+            foreach (var record in groupRecords)
             {
-                ct.ThrowIfCancellationRequested();
-
-                if (_processedFileLog.IsProcessed(file.FileName))
-                {
-                    _logger.LogInformation("[Skipped] {File} — already processed", file.FileName);
-                    summary.Skipped++;
-                    continue;
-                }
-
-                var record = await _mergeProcessor.ProcessAsync(file, ct);
-                groupRecords.Add(record);
                 summary.Tally(record.Status);
 
                 var docIdStr = record.TargetDocId.HasValue ? record.TargetDocId.ToString() : "N/A";
@@ -119,15 +111,13 @@ public class MergeOrchestrator : IMergeOrchestrator
                     _logger.LogWarning("  Error: {Message}", record.ErrorMessage);
 
                 await _reportGenerator.WriteRecordAsync(record);
-
-                if (record.Status != MergeStatus.Success)
-                {
-                    groupSuccess = false;
-                    _logger.LogWarning("Group '{Identifier}' failed at {File} — skipping remaining files in group",
-                        identifier, file.FileName);
-                    break;
-                }
             }
+
+            if (!groupSuccess)
+                _logger.LogWarning("Group '{Identifier}' failed", identifier);
+
+            groupSummaries.Add((identifier, firstRecord.TargetDocId, groupFiles.Count,
+                firstRecord.Status, firstRecord.ErrorMessage));
 
             // Only mark files as processed if the entire group succeeded
             if (groupSuccess)
@@ -146,6 +136,50 @@ public class MergeOrchestrator : IMergeOrchestrator
             summary.Skipped,
             summary.Success,
             summary.TotalProcessed - summary.Success);
+
+        await WriteSummaryFileAsync(summary, groupSummaries);
+    }
+
+    private async Task WriteSummaryFileAsync(
+        RunSummary summary,
+        List<(string Identifier, int? DocId, int FileCount, MergeStatus Status, string? Error)> groupSummaries)
+    {
+        try
+        {
+            var path = Path.Combine(_options.SourceDirectory,
+                $"merge-summary-{DateTime.Now:yyyyMMdd-HHmmss}.txt");
+
+            using var writer = new StreamWriter(path, false, System.Text.Encoding.UTF8);
+            await writer.WriteLineAsync($"EasyFile Merge Summary — {summary.StartedAt:u}");
+            await writer.WriteLineAsync($"Source: {_options.SourceDirectory}");
+            await writer.WriteLineAsync($"Cabinet: {_options.CabinetName}");
+            await writer.WriteLineAsync();
+
+            await writer.WriteLineAsync(
+                $"{"Document",-30} {"DocId",-10} {"Pages",-7} {"Status",-15} {"Error"}");
+            await writer.WriteLineAsync(
+                $"{"".PadRight(30, '-')}  {"".PadRight(8, '-')}  {"".PadRight(5, '-')}  {"".PadRight(13, '-')}  {"".PadRight(30, '-')}");
+
+            foreach (var (identifier, docId, fileCount, status, error) in groupSummaries)
+            {
+                var docIdStr = docId.HasValue ? docId.Value.ToString() : "N/A";
+                var errorStr = error ?? "";
+                await writer.WriteLineAsync(
+                    $"{identifier,-30} {docIdStr,-10} {fileCount,-7} {status,-15} {errorStr}");
+            }
+
+            await writer.WriteLineAsync();
+            var failed = summary.TotalProcessed - summary.Success;
+            await writer.WriteLineAsync(
+                $"Total: {summary.TotalFilesFound} files | {groupSummaries.Count} groups | " +
+                $"Success: {summary.Success} | Failed: {failed} | Skipped: {summary.Skipped}");
+
+            _logger.LogInformation("Summary written to {Path}", path);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to write summary file to source directory");
+        }
     }
 
     private void SweepTempDirectory()

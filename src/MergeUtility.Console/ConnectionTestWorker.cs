@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -69,7 +70,27 @@ internal sealed class ConnectionTestWorker : BackgroundService
     {
         var cabinet = _mergeOptions.CabinetName;
         var field = _mergeOptions.SearchFieldName;
-        var testValue = "RANCH-0001";
+
+        // Derive test value from first matching file in SourceDirectory
+        var sourceDir = _mergeOptions.SourceDirectory;
+        var pattern = _mergeOptions.FilePattern;
+        var regex = new Regex(_mergeOptions.IdentifierRegex);
+
+        var firstFile = Directory.EnumerateFiles(sourceDir, pattern).FirstOrDefault();
+        if (firstFile == null)
+        {
+            System.Console.WriteLine($"[SKIP] No files matching '{pattern}' in {sourceDir}");
+            return;
+        }
+
+        var match = regex.Match(Path.GetFileNameWithoutExtension(firstFile));
+        if (!match.Success)
+        {
+            System.Console.WriteLine($"[SKIP] File '{Path.GetFileName(firstFile)}' does not match IdentifierRegex");
+            return;
+        }
+
+        var testValue = match.Groups[1].Value;
 
         System.Console.WriteLine();
         System.Console.WriteLine($"Testing search: cabinet={cabinet}, field=\"{field}\", value=\"{testValue}\"...");
